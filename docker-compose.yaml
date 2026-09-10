@@ -1,0 +1,17 @@
+services:
+  cgv-push-bot:
+    build: .
+    environment:
+      DISCORD_TOKEN: "${DISCORD_TOKEN:-}"
+      DATABASE_URL: "${DATABASE_URL:-sqlite+aiosqlite:///./data/movie-bot.sqlite3}"
+      POLL_INTERVAL_SECONDS: "${POLL_INTERVAL_SECONDS:-300}"
+      POLL_OFFSET_SECONDS: "${POLL_OFFSET_SECONDS:-1}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      HISTORY_RETENTION_DAYS: "${HISTORY_RETENTION_DAYS:-90}"
+    init: true
+    restart: unless-stopped
+    volumes:
+      - movie-bot-data:/app/data
+
+volumes:
+  movie-bot-data:
