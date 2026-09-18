@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -21,6 +21,8 @@ class Settings:
     poll_offset_seconds: int
     log_level: str
     history_retention_days: int = 90
+    dashboard_password: str = field(default="", repr=False)
+    dashboard_cookie_secure: bool = False
 
     @classmethod
     def load(cls, *, dotenv_path: str | Path | None = None) -> Settings:
@@ -61,7 +63,22 @@ class Settings:
         ).strip()
         if not database_url:
             raise ConfigError("DATABASE_URL must not be empty")
-        return cls(token, database_url, poll_interval, poll_offset, log_level, retention_days)
+        cookie_secure = os.getenv("DASHBOARD_COOKIE_SECURE", "false").strip().lower()
+        if cookie_secure not in {"true", "false"}:
+            raise ConfigError("DASHBOARD_COOKIE_SECURE must be true or false")
+        password = os.getenv("DASHBOARD_PASSWORD", "")
+        if len(password) > 1_024:
+            raise ConfigError("DASHBOARD_PASSWORD must be at most 1024 characters")
+        return cls(
+            token,
+            database_url,
+            poll_interval,
+            poll_offset,
+            log_level,
+            retention_days,
+            password if password.strip() else "",
+            cookie_secure == "true",
+        )
 
     def sqlite_path(self) -> Path | None:
         parsed = urlparse(self.database_url)

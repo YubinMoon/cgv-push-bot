@@ -103,9 +103,11 @@ async def test_rechecks_expiration_using_current_time_between_sends(
 
 
 @pytest.mark.parametrize("deleted_user", [1, 2])
+@pytest.mark.parametrize("admin", [False, True])
 async def test_delete_waits_for_inflight_send_and_prevents_later_sends(
     sessions: async_sessionmaker[AsyncSession],
     deleted_user: int,
+    admin: bool,
 ) -> None:
     lock = asyncio.Lock()
     sending = asyncio.Event()
@@ -126,7 +128,12 @@ async def test_delete_waits_for_inflight_send_and_prevents_later_sends(
 
     async def delete_subscription() -> None:
         deleting.set()
-        await alerts.delete_subscription(user_id=deleted_user, subscription_id=str(deleted_user))
+        if admin:
+            await alerts.admin_delete_subscription(deleted_user)
+        else:
+            await alerts.delete_subscription(
+                user_id=deleted_user, subscription_id=str(deleted_user)
+            )
 
     async with asyncio.timeout(5):
         async with asyncio.TaskGroup() as group:
@@ -170,3 +177,81 @@ async def test_retry_keeps_persisted_discovery_timestamp(
         assert notification is not None
         assert notification.attempts == 2
         assert notification.status == NotificationStatus.SENT
+
+
+@pytest.mark.parametrize("admin", [False, True])
+async def test_admin_deletion_keeps_user_ownership_checks(
+    sessions: async_sessionmaker[AsyncSession],
+    admin: bool,
+) -> None:
+    service = MovieAlertService(sessions, cast(CgvGateway, None))
+    if admin:
+        await service.admin_delete_subscription(1)
+    else:
+        from cgv_push_bot.alerts.service import SubscriptionNotFoundError
+
+        with pytest.raises(SubscriptionNotFoundError):
+            await service.delete_subscription(user_id=999, subscription_id="1")
+    async with sessions() as session:
+        assert (await session.get(Subscription, 1) is None) == admin
+        assert await session.get(Subscription, 2) is not None
+
+
+@pytest.mark.parametrize("succeed", [False, True])
+async def test_manual_retry_preserves_history_and_adds_one_attempt(
+    sessions: async_sessionmaker[AsyncSession],
+    succeed: bool,
+) -> None:
+    async with sessions() as session, session.begin():
+        await session.execute(delete(Subscription).where(Subscription.id == 2))
+        notification = await session.get(Notification, 1)
+        assert notification is not None
+        notification.status = NotificationStatus.FAILED
+        notification.attempts = 8
+        notification.last_error = "RuntimeError"
+
+    class Sender:
+        async def send(self, **values: object) -> str:
+            assert values["discovered_at"] == DISCOVERED
+            if not succeed:
+                raise RuntimeError("failed again")
+            return "message"
+
+    service = DeliveryService(sessions, Sender(), clock=lambda: NOW)
+    await service.retry_failed(1)
+    with pytest.raises(ValueError):
+        await service.retry_failed(1)
+    async with sessions() as session:
+        notification = await session.get(Notification, 1)
+        assert notification is not None
+        assert notification.attempts == 8
+        assert notification.created_at.replace(tzinfo=UTC) == DISCOVERED
+    assert await service.deliver_once() == int(succeed)
+    async with sessions() as session:
+        notification = await session.get(Notification, 1)
+        assert notification is not None
+        assert notification.attempts == 9
+        assert notification.status == (
+            NotificationStatus.SENT if succeed else NotificationStatus.FAILED
+        )
+    assert await service.deliver_once() == 0
+
+
+async def test_manual_retry_rejects_missing_expired_and_nonfailed(
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    from unittest.mock import AsyncMock
+
+    service = DeliveryService(sessions, AsyncMock(), clock=lambda: NOW)
+    with pytest.raises(LookupError):
+        await service.retry_failed(999)
+    with pytest.raises(ValueError):
+        await service.retry_failed(1)
+    async with sessions() as session, session.begin():
+        notification = await session.get(Notification, 1)
+        subscription = await session.get(Subscription, 1)
+        assert notification is not None and subscription is not None
+        notification.status = NotificationStatus.FAILED
+        subscription.expires_at = NOW
+    with pytest.raises(ValueError):
+        await service.retry_failed(1)

@@ -5,13 +5,14 @@ import os
 import sqlite3
 import subprocess
 import sys
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Coroutine
 from contextlib import closing
 from functools import partial
 from pathlib import Path
 from typing import Any
 
 import pytest
+import uvicorn
 
 from cgv_push_bot.__main__ import main, migrate
 from cgv_push_bot.config import Settings
@@ -139,3 +140,128 @@ async def test_run_releases_resources_on_initialization_and_shutdown_failures(
             "gateway_close",
             "engine_close",
         ]
+
+
+@pytest.mark.asyncio
+async def test_run_wires_dashboard_and_closes_it_before_bot_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from cgv_push_bot.__main__ import run
+
+    events: list[str] = []
+    module = "cgv_push_bot.__main__"
+    sessions = MagicMock(name="sessions")
+    service = MagicMock(name="service")
+    delivery_service = MagicMock(name="delivery_service")
+    names = MagicMock(name="names")
+    names.close = AsyncMock(side_effect=lambda: events.append("names_close"))
+    app = object()
+    server = MagicMock(name="server")
+    captured_app: dict[str, object] = {}
+    captured_config: dict[str, object] = {}
+
+    engine = MagicMock()
+    engine.dispose = AsyncMock(side_effect=lambda: events.append("engine_close"))
+    gateway = MagicMock()
+    gateway.close = AsyncMock(side_effect=lambda: events.append("gateway_close"))
+    bot = MagicMock()
+    bot.__aenter__ = AsyncMock(return_value=bot)
+
+    def bot_exit(*_args: object) -> None:
+        events.append("bot_close")
+
+    def bot_start(_token: str) -> None:
+        events.append("start")
+
+    bot.__aexit__ = AsyncMock(side_effect=bot_exit)
+    bot.is_ready = MagicMock(name="is_ready")
+    bot.start = AsyncMock(side_effect=bot_start)
+    poller = MagicMock()
+    poller.close = AsyncMock(side_effect=lambda: events.append("poller_close"))
+    delivery = MagicMock()
+    delivery.close = AsyncMock(side_effect=lambda: events.append("delivery_close"))
+
+    def create_client() -> MagicMock:
+        events.append("client")
+        return MagicMock()
+
+    def create_test_bot(_service: object) -> MagicMock:
+        events.append("bot")
+        return bot
+
+    def create_test_app(**kwargs: object) -> object:
+        events.append("app")
+        captured_app.update(kwargs)
+        return app
+
+    def create_test_server(config: object) -> MagicMock:
+        events.append("server")
+        captured_config["config"] = config
+        return server
+
+    async def serve_test_server(_server: object, bot_start: Awaitable[None]) -> None:
+        events.append("serve")
+        await bot_start
+
+    monkeypatch.setattr(f"{module}.migrate", MagicMock())
+    monkeypatch.setattr(f"{module}.create_engine", MagicMock(return_value=engine))
+    monkeypatch.setattr(f"{module}.CgvClient", create_client)
+    monkeypatch.setattr(f"{module}.CgvGateway", MagicMock(return_value=gateway))
+    monkeypatch.setattr(f"{module}.create_bot", create_test_bot)
+    monkeypatch.setattr(f"{module}.MovieAlertService", MagicMock(return_value=service))
+    monkeypatch.setattr(f"{module}.create_session_factory", MagicMock(return_value=sessions))
+    monkeypatch.setattr(f"{module}.Poller", MagicMock(return_value=poller))
+    monkeypatch.setattr(f"{module}.DeliveryService", MagicMock(return_value=delivery_service))
+    monkeypatch.setattr(f"{module}.DeliveryWorker", MagicMock(return_value=delivery))
+    monkeypatch.setattr(f"{module}.DiscordNotificationSender", MagicMock())
+    monkeypatch.setattr(f"{module}.DiscordNameResolver", MagicMock(return_value=names))
+    monkeypatch.setattr(f"{module}.create_app", create_test_app)
+    monkeypatch.setattr(f"{module}.ApiServer", create_test_server)
+    monkeypatch.setattr(f"{module}.serve_with_bot", serve_test_server)
+
+    settings = Settings(
+        "token",
+        "sqlite+aiosqlite:///:memory:",
+        300,
+        1,
+        "INFO",
+        dashboard_password="secret",
+        dashboard_cookie_secure=True,
+    )
+    await run(settings)
+
+    assert captured_app == {
+        "sessions": sessions,
+        "service": service,
+        "delivery": delivery_service,
+        "names": names,
+        "is_ready": bot.is_ready,
+        "password": "secret",
+        "cookie_secure": True,
+    }
+    config = captured_config["config"]
+    assert isinstance(config, uvicorn.Config)
+    assert config.app is app
+    assert config.host == "0.0.0.0"
+    assert config.port == 8000
+    assert config.workers == 1
+    assert config.access_log is False
+    assert config.log_config is None
+    assert config.proxy_headers is False
+    assert config.timeout_graceful_shutdown == 5
+    assert events == [
+        "client",
+        "bot",
+        "app",
+        "server",
+        "serve",
+        "start",
+        "names_close",
+        "delivery_close",
+        "poller_close",
+        "bot_close",
+        "gateway_close",
+        "engine_close",
+    ]

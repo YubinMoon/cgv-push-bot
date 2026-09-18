@@ -243,6 +243,15 @@ class MovieAlertService:
         async with self._subscription_lock:
             await self._delete_subscription(user_id=user_id, subscription_id=subscription_id)
 
+    async def admin_delete_subscription(self, subscription_id: int) -> None:
+        async with self._subscription_lock:
+            async with self._sessions() as session:
+                subscription = await session.get(Subscription, subscription_id)
+                if subscription is None:
+                    raise SubscriptionNotFoundError("알림을 찾을 수 없습니다.")
+                user_id = int(subscription.discord_user_id)
+            await self._delete_subscription(user_id=user_id, subscription_id=str(subscription_id))
+
     async def _delete_subscription(self, *, user_id: int, subscription_id: str) -> None:
         try:
             identifier = int(subscription_id)

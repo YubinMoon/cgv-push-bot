@@ -6,6 +6,7 @@ import sys
 from contextlib import AsyncExitStack
 from pathlib import Path
 
+import uvicorn
 from alembic import command
 from alembic.config import Config as AlembicConfig
 
@@ -19,6 +20,9 @@ from .db.session import create_engine, create_session_factory
 from .discord_ui.bot import create_bot
 from .discord_ui.notifications import DiscordNotificationSender
 from .logging import configure_logging
+from .web.app import create_app
+from .web.names import DiscordNameResolver
+from .web.runtime import ApiServer, serve_with_bot
 
 LOGGER = logging.getLogger(__name__)
 
@@ -62,11 +66,10 @@ async def run(settings: Settings) -> None:
             settings.poll_offset_seconds,
         )
         resources.push_async_callback(poller.close)
-        delivery = DeliveryWorker(
-            DeliveryService(
-                sessions, DiscordNotificationSender(bot), subscription_lock=subscription_lock
-            ),
+        delivery_service = DeliveryService(
+            sessions, DiscordNotificationSender(bot), subscription_lock=subscription_lock
         )
+        delivery = DeliveryWorker(delivery_service)
         resources.push_async_callback(delivery.close)
 
         async def start_workers() -> None:
@@ -74,7 +77,33 @@ async def run(settings: Settings) -> None:
             delivery.start()
 
         bot.add_listener(start_workers, "on_ready")
-        await bot.start(settings.discord_token)
+        if not settings.dashboard_password:
+            await bot.start(settings.discord_token)
+            return
+        names = DiscordNameResolver(bot)
+        resources.push_async_callback(names.close)
+        app = create_app(
+            sessions=sessions,
+            service=service,
+            delivery=delivery_service,
+            names=names,
+            is_ready=bot.is_ready,
+            password=settings.dashboard_password,
+            cookie_secure=settings.dashboard_cookie_secure,
+        )
+        server = ApiServer(
+            uvicorn.Config(
+                app,
+                host="0.0.0.0",
+                port=8000,
+                workers=1,
+                access_log=False,
+                log_config=None,
+                proxy_headers=False,
+                timeout_graceful_shutdown=5,
+            )
+        )
+        await serve_with_bot(server, bot.start(settings.discord_token))
 
 
 def main() -> int:

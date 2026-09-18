@@ -14,6 +14,8 @@ def clean_settings_environment(monkeypatch: pytest.MonkeyPatch) -> None:
         "POLL_OFFSET_SECONDS",
         "LOG_LEVEL",
         "HISTORY_RETENTION_DAYS",
+        "DASHBOARD_PASSWORD",
+        "DASHBOARD_COOKIE_SECURE",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -39,6 +41,7 @@ def test_settings_defaults() -> None:
         ("HISTORY_RETENTION_DAYS", "-1", "between 0 and 36500"),
         ("HISTORY_RETENTION_DAYS", "36501", "between 0 and 36500"),
         ("LOG_LEVEL", "TRACE", "LOG_LEVEL must be one of"),
+        ("DASHBOARD_PASSWORD", "x" * 1_025, "at most 1024"),
     ],
 )
 def test_settings_reject_invalid_values(
@@ -59,3 +62,29 @@ def test_settings_requires_token(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_history_retention_setting(monkeypatch: pytest.MonkeyPatch, days: int) -> None:
     monkeypatch.setenv("HISTORY_RETENTION_DAYS", str(days))
     assert Settings.load(dotenv_path="/does/not/exist").history_retention_days == days
+
+
+@pytest.mark.parametrize("password", ["", "   ", "dashboard-test-password", " 비밀번호 "])
+async def test_dashboard_password_is_optional_and_not_repr(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    password: str,
+) -> None:
+    monkeypatch.setenv("DISCORD_TOKEN", "token")
+    monkeypatch.setenv("DASHBOARD_PASSWORD", password)
+    monkeypatch.setenv("DASHBOARD_COOKIE_SECURE", "true")
+    settings = Settings.load(dotenv_path=tmp_path / "missing")
+    assert settings.dashboard_password == (password if password.strip() else "")
+    assert settings.dashboard_cookie_secure
+    if password.strip():
+        assert password not in repr(settings)
+
+
+def test_dashboard_cookie_secure_rejects_invalid_value(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("DISCORD_TOKEN", "token")
+    monkeypatch.setenv("DASHBOARD_COOKIE_SECURE", "maybe")
+    with pytest.raises(ConfigError, match="DASHBOARD_COOKIE_SECURE"):
+        Settings.load(dotenv_path=tmp_path / "missing")

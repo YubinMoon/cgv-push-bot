@@ -8,7 +8,12 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from cgv_push_bot.db.models import Notification, NotificationStatus
+from cgv_push_bot.db.models import (
+    Notification,
+    NotificationStatus,
+    Subscription,
+    SubscriptionStatus,
+)
 from cgv_push_bot.db.repositories import NotificationRepository
 
 from .protocols import NotificationSender
@@ -37,6 +42,26 @@ class DeliveryService:
     async def deliver_once(self, *, now: datetime | None = None, limit: int = 25) -> int:
         async with self._delivery_lock:
             return await self._deliver_once(now=now, limit=limit)
+
+    async def retry_failed(self, notification_id: int) -> None:
+        async with self._subscription_lock, self._sessions() as session, session.begin():
+            notification = await session.get(Notification, notification_id)
+            if notification is None:
+                raise LookupError("알림을 찾을 수 없습니다.")
+            subscription = await session.get(Subscription, notification.subscription_id)
+            now = self._clock()
+            expires_at = subscription.expires_at if subscription else None
+            if expires_at is not None and expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=UTC)
+            if (
+                notification.status != NotificationStatus.FAILED
+                or subscription is None
+                or subscription.status != SubscriptionStatus.ACTIVE
+                or (expires_at is not None and expires_at <= now)
+            ):
+                raise ValueError("활성 구독의 실패한 알림만 재시도할 수 있습니다.")
+            notification.status = NotificationStatus.PENDING
+            notification.next_retry_at = now
 
     async def _deliver_once(self, *, now: datetime | None = None, limit: int = 25) -> int:
         current = now or self._clock()
