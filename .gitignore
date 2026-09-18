@@ -19,6 +19,9 @@ htmlcov/
 .pyright/
 .venv/
 dist/
+node_modules/
+playwright-report/
+test-results/
 build/
 *.egg-info/
 data/

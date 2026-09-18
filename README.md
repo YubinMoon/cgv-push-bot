@@ -107,10 +107,8 @@ docker compose logs -f cgv-push-bot
 docker compose down
 ```
 
-기존 배포의 데이터를 유지하기 위해 DB 파일명은 `movie-bot.sqlite3`,
-Docker 볼륨명은 `movie-bot-data`를 사용합니다.
-
-알림 데이터는 Docker 볼륨에 저장되어 컨테이너를 다시 만들어도 유지됩니다.
+Compose는 PostgreSQL 16 컨테이너와 `postgres-data` 볼륨을 사용합니다. PostgreSQL 데이터는
+컨테이너를 다시 만들어도 유지됩니다.
 `docker compose down -v`를 실행하면 데이터도 삭제됩니다.
 
 #### Python과 uv
@@ -145,7 +143,10 @@ uv run python -m cgv_push_bot
 | `DISCORD_TOKEN` | 없음 | Discord 봇 토큰(필수) |
 | `POLL_INTERVAL_SECONDS` | `300` | 조회 간격(초), 최소 60초 |
 | `POLL_OFFSET_SECONDS` | `1` | 한국 시간 자정부터 첫 조회까지의 시간(초), 0 이상이며 조회 간격 미만 |
-| `DATABASE_URL` | `sqlite+aiosqlite:///./data/movie-bot.sqlite3` | 알림 데이터를 저장할 DB |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./data/movie-bot.sqlite3` | 알림 데이터를 저장할 DB(Compose 기본값은 PostgreSQL) |
+| `POSTGRES_DB` | `cgv_push_bot` | Compose PostgreSQL 데이터베이스 이름 |
+| `POSTGRES_USER` | `cgv_push_bot` | Compose PostgreSQL 사용자 |
+| `POSTGRES_PASSWORD` | `cgv_push_bot_dev` | Compose PostgreSQL 비밀번호(운영 환경에서 변경) |
 | `HISTORY_RETENTION_DAYS` | `90` | 만료 후 기록 보관 일수(0은 자동 정리 끄기, 최대 36500일) |
 | `LOG_LEVEL` | `INFO` | 로그 수준 |
 
@@ -170,6 +171,57 @@ Discord 전송 성공 후 DB 기록 전에 프로세스가 종료되는 경우�
 `HISTORY_RETENTION_DAYS=0`으로 설정하면 자동 정리를 끌 수 있습니다.
 조회·발송 실패의 DB 기록에는 예외 유형만 저장하며, 원문 응답이나 오류 메시지는 저장하지
 않습니다. 이 동작은 새로 기록하는 오류에 적용되며 기존 DB 기록을 소급 변경하지 않습니다.
+
+## 관리 대시보드
+
+`.env`에 관리 비밀번호를 설정하고 Compose로 실행합니다.
+
+```dotenv
+DASHBOARD_PASSWORD=여기에-관리-비밀번호-입력
+DASHBOARD_PORT=8080
+DASHBOARD_COOKIE_SECURE=false
+```
+
+```bash
+docker compose up -d --build
+```
+
+내부망의 `http://서버IP:8080`에 접속하여 비밀번호로 로그인합니다.
+비밀번호가 비어 있으면 관리 API는 시작하지 않고 기존 봇만 실행합니다.
+비밀번호 변경은 봇 컨테이너를 다시 생성해야 적용됩니다.
+
+- **개요:** Discord 연결 상태, 구독과 발송 상태별 건수, 조회 오류 건수를 확인합니다.
+- **구독:** 조건별 조회와 상세 확인, 삭제를 제공합니다. 삭제하면 관련 영화·발송 기록도 삭제됩니다.
+- **발송:** 상태별 내역과 전체 영화 제목을 확인하고, 활성·미만료 구독의 실패 알림을 재시도합니다.
+  수동 재시도는 발송 대기열에 추가 1회를 접수하며, 발견 시각과 누적 시도 횟수를 유지합니다.
+- **이름:** Discord에서 확인한 이름을 메모리에 임시 보관합니다. 조회 중이거나 접근할 수 없으면
+  ID를 표시합니다. DM은 개인 DM으로 표시하며 서버별 별명은 조회하지 않습니다.
+- **로그인:** 세션은 8시간 후 만료되며 로그아웃·봇 재시작 시 해제됩니다.
+
+프론트 컨테이너는 정적 화면과 `/api` 프록시를 제공합니다. 비밀번호와 Discord 토큰은
+봇 컨테이너에만 전달하며, DB 볼륨도 봇만 사용합니다. API는 봇과 같은 프로세스에서 실행하여
+삭제·발송 잠금을 공유합니다. 봇 인스턴스와 API 워커는 각각 하나로 유지합니다.
+
+기본 구성은 신뢰할 수 있는 내부망 HTTP용입니다. HTTP에서는 비밀번호와 통신이 암호화되지
+않습니다. HTTPS 리버스 프록시로 운영할 때는 `DASHBOARD_COOKIE_SECURE=true`로 설정하고
+프록시에서 원래 `Host` 헤더를 유지합니다.
+로그인은 클라이언트 IP별 분당 5회로 제한합니다.
+
+프론트 개발·검증에는 Node.js 22.12 이상이 필요하며 `frontend`에서 실행합니다. Python 의존성은 기존처럼 `uv`로 관리합니다.
+
+```bash
+cd frontend
+npm ci
+npm run dev
+npm run typecheck
+npm run lint
+npm test
+npm run build
+npx playwright install --with-deps chromium
+npm run test:e2e
+```
+
+Vite 개발 서버도 `/api`를 로컬 봇 API(8000번 포트)로 프록시합니다.
 
 ## 개발 검증
 

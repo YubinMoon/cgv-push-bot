@@ -1,17 +1,45 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-cgv_push_bot}"
+      POSTGRES_USER: "${POSTGRES_USER:-cgv_push_bot}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-cgv_push_bot_dev}"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
   cgv-push-bot:
     build: .
     environment:
       DISCORD_TOKEN: "${DISCORD_TOKEN:-}"
-      DATABASE_URL: "${DATABASE_URL:-sqlite+aiosqlite:///./data/movie-bot.sqlite3}"
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-cgv_push_bot}:${POSTGRES_PASSWORD:-cgv_push_bot_dev}@postgres:5432/${POSTGRES_DB:-cgv_push_bot}"
       POLL_INTERVAL_SECONDS: "${POLL_INTERVAL_SECONDS:-300}"
       POLL_OFFSET_SECONDS: "${POLL_OFFSET_SECONDS:-1}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       HISTORY_RETENTION_DAYS: "${HISTORY_RETENTION_DAYS:-90}"
+      DASHBOARD_PASSWORD: "${DASHBOARD_PASSWORD:-}"
+      DASHBOARD_COOKIE_SECURE: "${DASHBOARD_COOKIE_SECURE:-false}"
     init: true
+    stop_signal: SIGINT
+    stop_grace_period: 20s
     restart: unless-stopped
-    volumes:
-      - movie-bot-data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  dashboard:
+    build: ./frontend
+    ports:
+      - "${DASHBOARD_PORT:-8080}:80"
+    depends_on:
+      - cgv-push-bot
+    restart: unless-stopped
 
 volumes:
-  movie-bot-data:
+  postgres-data:
