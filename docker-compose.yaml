@@ -18,7 +18,7 @@ services:
     build: .
     environment:
       DISCORD_TOKEN: "${DISCORD_TOKEN:-}"
-      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-cgv_push_bot}:${POSTGRES_PASSWORD:-cgv_push_bot_dev}@postgres:5432/${POSTGRES_DB:-cgv_push_bot}"
+      DATABASE_URL: "${DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER:-cgv_push_bot}:${POSTGRES_PASSWORD:-cgv_push_bot_dev}@postgres:5432/${POSTGRES_DB:-cgv_push_bot}}"
       POLL_INTERVAL_SECONDS: "${POLL_INTERVAL_SECONDS:-300}"
       POLL_OFFSET_SECONDS: "${POLL_OFFSET_SECONDS:-1}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
@@ -29,6 +29,8 @@ services:
     stop_signal: SIGINT
     stop_grace_period: 20s
     restart: unless-stopped
+    volumes:
+      - movie-bot-data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -42,4 +44,5 @@ services:
     restart: unless-stopped
 
 volumes:
+  movie-bot-data:
   postgres-data:

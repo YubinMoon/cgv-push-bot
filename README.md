@@ -109,7 +109,20 @@ docker compose down
 
 Compose는 PostgreSQL 16 컨테이너와 `postgres-data` 볼륨을 사용합니다. PostgreSQL 데이터는
 컨테이너를 다시 만들어도 유지됩니다.
-`docker compose down -v`를 실행하면 데이터도 삭제됩니다.
+`docker compose down -v`를 실행하면 `postgres-data`와 `movie-bot-data` 볼륨의 데이터가 모두 삭제됩니다.
+
+##### 기존 SQLite 배포에서 업그레이드
+
+이전 버전의 알림 데이터는 `movie-bot-data` 볼륨의 `movie-bot.sqlite3`에 남아 있습니다.
+설정 없이 업그레이드하면 빈 PostgreSQL DB로 시작하므로, 기존 데이터를 계속 사용하려면
+`docker compose up` 전에 `.env`에 다음 값을 설정합니다.
+
+```dotenv
+DATABASE_URL=sqlite+aiosqlite:///./data/movie-bot.sqlite3
+```
+
+SQLite 데이터를 PostgreSQL로 옮기는 자동 이전 기능은 없습니다. 이 설정에서도 PostgreSQL
+컨테이너는 함께 실행되지만 봇은 사용하지 않습니다.
 
 #### Python과 uv
 
@@ -143,7 +156,7 @@ uv run python -m cgv_push_bot
 | `DISCORD_TOKEN` | 없음 | Discord 봇 토큰(필수) |
 | `POLL_INTERVAL_SECONDS` | `300` | 조회 간격(초), 최소 60초 |
 | `POLL_OFFSET_SECONDS` | `1` | 한국 시간 자정부터 첫 조회까지의 시간(초), 0 이상이며 조회 간격 미만 |
-| `DATABASE_URL` | `sqlite+aiosqlite:///./data/movie-bot.sqlite3` | 알림 데이터를 저장할 DB(Compose 기본값은 PostgreSQL) |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./data/movie-bot.sqlite3` | 알림 데이터를 저장할 DB(앱 기본값 SQLite). Compose 기본값은 함께 실행하는 PostgreSQL이며 `.env`에서 변경 가능 |
 | `POSTGRES_DB` | `cgv_push_bot` | Compose PostgreSQL 데이터베이스 이름 |
 | `POSTGRES_USER` | `cgv_push_bot` | Compose PostgreSQL 사용자 |
 | `POSTGRES_PASSWORD` | `cgv_push_bot_dev` | Compose PostgreSQL 비밀번호(운영 환경에서 변경) |
