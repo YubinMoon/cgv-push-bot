@@ -21,7 +21,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from cgv_push_bot.alerts.service import SubscriptionNotFoundError
+from cgv_push_bot.alerts.service import MAX_INT4_ID, SubscriptionNotFoundError
 from cgv_push_bot.db.models import Notification, Subscription
 
 from .auth import SESSION_COOKIE, Session, SessionStore
@@ -37,7 +37,7 @@ from .models import (
 )
 from .repository import DashboardRepository
 
-DashboardID = Annotated[int, Path(ge=1, le=9_223_372_036_854_775_807)]
+DashboardID = Annotated[int, Path(ge=1, le=MAX_INT4_ID)]
 
 
 class NameResolver(Protocol):
@@ -257,11 +257,7 @@ def create_app(
         page: int = Query(default=1, ge=1, le=2_147_483_647),
         page_size: int = Query(default=25, ge=1, le=100),
         status_filter: str | None = Query(default=None, alias="status"),
-        subscription_id: int | None = Query(
-            default=None,
-            ge=1,
-            le=9_223_372_036_854_775_807,
-        ),
+        subscription_id: int | None = Query(default=None, ge=1, le=MAX_INT4_ID),
     ) -> PageResponse[NotificationResponse]:
         current_session(dashboard_session)
         _check_status(status_filter, ("pending", "sent", "failed"))

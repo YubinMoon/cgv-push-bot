@@ -31,6 +31,8 @@ from .scheduling import next_poll_slot
 SEOUL = ZoneInfo("Asia/Seoul")
 LOGGER = logging.getLogger(__name__)
 POLL_TARGET_SPACING_SECONDS = 0.5
+# Primary keys are PostgreSQL int4 columns; larger values cannot identify any row.
+MAX_INT4_ID = 2_147_483_647
 
 
 class DuplicateSubscriptionError(ValueError):
@@ -244,6 +246,8 @@ class MovieAlertService:
             await self._delete_subscription(user_id=user_id, subscription_id=subscription_id)
 
     async def admin_delete_subscription(self, subscription_id: int) -> None:
+        if not _is_database_id(subscription_id):
+            raise SubscriptionNotFoundError("알림을 찾을 수 없습니다.")
         async with self._subscription_lock:
             async with self._sessions() as session:
                 subscription = await session.get(Subscription, subscription_id)
@@ -257,6 +261,8 @@ class MovieAlertService:
             identifier = int(subscription_id)
         except ValueError as error:
             raise SubscriptionNotFoundError("알림을 찾을 수 없습니다.") from error
+        if not _is_database_id(identifier):
+            raise SubscriptionNotFoundError("알림을 찾을 수 없습니다.")
         try:
             async with self._sessions() as session, session.begin():
                 subscription = await SubscriptionRepository(session).get_owned(identifier, user_id)
@@ -501,6 +507,10 @@ class MovieAlertService:
 
 def expiration_for(show_date: date) -> datetime:
     return datetime.combine(show_date + timedelta(days=1), time(6), SEOUL).astimezone(UTC)
+
+
+def _is_database_id(value: int) -> bool:
+    return 1 <= value <= MAX_INT4_ID
 
 
 def _as_utc(value: datetime) -> datetime:

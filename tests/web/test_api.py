@@ -388,18 +388,61 @@ async def test_logout_invalidates_session(
 
 
 @pytest.mark.asyncio
-async def test_dashboard_ids_reject_values_outside_signed_integer_range(
+@pytest.mark.parametrize("oversized", ["2147483648", "3000000000", "9223372036854775808"])
+async def test_dashboard_ids_reject_values_outside_database_integer_range(
+    app_parts: tuple[Any, Service, Delivery],
+    oversized: str,
+) -> None:
+    app, service, delivery = app_parts
+    async with await _client(app) as client:
+        csrf = await _login(client)
+        mutation_headers = {"Origin": "http://test", "X-CSRF-Token": csrf}
+        responses = [
+            await client.get(f"/api/subscriptions/{oversized}"),
+            await client.delete(f"/api/subscriptions/{oversized}", headers=mutation_headers),
+            await client.get(f"/api/notifications/{oversized}"),
+            await client.post(f"/api/notifications/{oversized}/retry", headers=mutation_headers),
+            await client.get(f"/api/notifications?subscription_id={oversized}"),
+        ]
+
+    assert [response.status_code for response in responses] == [422] * len(responses)
+    assert service.deleted == []
+    assert delivery.retried == []
+
+
+@pytest.mark.asyncio
+async def test_dashboard_ids_accept_database_integer_maximum(
+    app_parts: tuple[Any, Service, Delivery],
+) -> None:
+    app, service, delivery = app_parts
+    maximum = 2_147_483_647
+    async with await _client(app) as client:
+        csrf = await _login(client)
+        mutation_headers = {"Origin": "http://test", "X-CSRF-Token": csrf}
+        subscription = await client.get(f"/api/subscriptions/{maximum}")
+        notification = await client.get(f"/api/notifications/{maximum}")
+        filtered = await client.get(f"/api/notifications?subscription_id={maximum}")
+        deleted = await client.delete(f"/api/subscriptions/{maximum}", headers=mutation_headers)
+        retried = await client.post(f"/api/notifications/{maximum}/retry", headers=mutation_headers)
+
+    assert subscription.status_code == 404
+    assert notification.status_code == 404
+    assert filtered.status_code == 200
+    assert filtered.json()["total"] == 0
+    assert deleted.status_code == 204
+    assert retried.status_code == 204
+    assert service.deleted == [maximum]
+    assert delivery.retried == [maximum]
+
+
+@pytest.mark.asyncio
+async def test_page_numbers_reject_values_outside_database_integer_range(
     app_parts: tuple[Any, Service, Delivery],
 ) -> None:
     app, _service, _delivery = app_parts
-    oversized = "9223372036854775808"
+    oversized = "2147483648"
     async with await _client(app) as client:
         responses = [
-            await client.get(f"/api/subscriptions/{oversized}"),
-            await client.delete(f"/api/subscriptions/{oversized}"),
-            await client.get(f"/api/notifications/{oversized}"),
-            await client.post(f"/api/notifications/{oversized}/retry"),
-            await client.get(f"/api/notifications?subscription_id={oversized}"),
             await client.get(f"/api/notifications?page={oversized}"),
             await client.get(f"/api/subscriptions?page={oversized}"),
         ]

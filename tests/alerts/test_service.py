@@ -6,7 +6,12 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from cgv_push_bot.alerts.delivery import DeliveryService
-from cgv_push_bot.alerts.service import MovieAlertService, expiration_for
+from cgv_push_bot.alerts.service import (
+    MAX_INT4_ID,
+    MovieAlertService,
+    SubscriptionNotFoundError,
+    expiration_for,
+)
 from cgv_push_bot.cgv import Movie
 from cgv_push_bot.cgv.gateway import CgvGateway
 from cgv_push_bot.db.base import Base
@@ -263,5 +268,48 @@ async def test_subscription_summary_preserves_destination_and_owner(guild_id: in
         assert await service.list_subscriptions(8) == ()
         await service.delete_subscription(user_id=7, subscription_id=summary.id)
         assert await service.list_subscriptions(7) == ()
+    finally:
+        await engine.dispose()
+
+
+class UnusedSessions:
+    def __call__(self) -> object:
+        raise AssertionError("out-of-range IDs must not reach the database")
+
+
+@pytest.mark.parametrize(
+    "subscription_id",
+    ["0", "-1", str(MAX_INT4_ID + 1), "3000000000", "9223372036854775808"],
+)
+async def test_delete_subscription_rejects_ids_outside_database_range(
+    subscription_id: str,
+) -> None:
+    service = MovieAlertService(cast(Any, UnusedSessions()), cast(CgvGateway, FakeGateway()))
+
+    with pytest.raises(SubscriptionNotFoundError):
+        await service.delete_subscription(user_id=7, subscription_id=subscription_id)
+
+
+@pytest.mark.parametrize("subscription_id", [0, -1, MAX_INT4_ID + 1, 9_223_372_036_854_775_808])
+async def test_admin_delete_subscription_rejects_ids_outside_database_range(
+    subscription_id: int,
+) -> None:
+    service = MovieAlertService(cast(Any, UnusedSessions()), cast(CgvGateway, FakeGateway()))
+
+    with pytest.raises(SubscriptionNotFoundError):
+        await service.admin_delete_subscription(subscription_id)
+
+
+async def test_delete_subscription_at_database_maximum_queries_and_reports_not_found() -> None:
+    engine = create_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        service = MovieAlertService(create_session_factory(engine), cast(CgvGateway, FakeGateway()))
+
+        with pytest.raises(SubscriptionNotFoundError):
+            await service.delete_subscription(user_id=7, subscription_id=str(MAX_INT4_ID))
+        with pytest.raises(SubscriptionNotFoundError):
+            await service.admin_delete_subscription(MAX_INT4_ID)
     finally:
         await engine.dispose()
